@@ -512,8 +512,280 @@ def scrape_stocktwits():
         html = http_get(f"https://stocktwits.com/symbol/{sym}")
         if not html: continue
         for code in extract_codes(html):
-            if add_result(code, f"StockTwits:{sym}", f"symbol stream"): found += 1
+            if add_result(code, f"StockTwits:{sym}", "symbol stream"): found += 1
         time.sleep(random.uniform(2, 3))
+    return found
+
+def scrape_topgg(pages=5):
+    """top.gg — the largest Discord server and bot listing site."""
+    found = 0
+    tags  = ["trading","forex","crypto","stocks","investing","finance","signals"]
+    inv_re = re.compile(
+        r'href=["\']https?://discord(?:app)?\.com/invite/([A-Za-z0-9\-_]+)["\']'
+        r'|href=["\']https?://discord\.gg/([A-Za-z0-9\-_]+)["\']',
+        re.IGNORECASE
+    )
+    for tag in tags:
+        for page in range(1, pages + 1):
+            html = http_get(
+                f"https://top.gg/servers/tag/{urllib.parse.quote(tag)}?page={page}",
+                headers={"Referer": "https://top.gg/"}
+            )
+            if not html: continue
+            for m in inv_re.finditer(html):
+                code = m.group(1) or m.group(2)
+                if code and add_result(code, f"Top.gg:{tag}", f"page {page}"): found += 1
+            for code in extract_codes(html):
+                if add_result(code, f"Top.gg:{tag}", f"page {page}"): found += 1
+            time.sleep(random.uniform(2, 3.5))
+    return found
+
+def scrape_disforge(pages=5):
+    """Disforge.com — Discord server listing directory."""
+    found  = 0
+    cats   = ["trading","crypto","forex","stocks","finance","investing","signals"]
+    for cat in cats:
+        for page in range(1, pages + 1):
+            html = http_get(
+                f"https://disforge.com/servers?type={cat}&page={page}",
+                headers={"Referer": "https://disforge.com/"}
+            )
+            if not html: continue
+            for code in extract_codes(html):
+                if add_result(code, f"Disforge:{cat}", f"page {page}"): found += 1
+            time.sleep(random.uniform(1.5, 3))
+    return found
+
+def scrape_discords_com(pages=5):
+    """Discords.com — public server listing."""
+    found = 0
+    tags  = ["trading","crypto","forex","stocks","finance","investing","signals"]
+    for tag in tags:
+        for page in range(1, pages + 1):
+            html = http_get(
+                f"https://discords.com/servers?tag={urllib.parse.quote(tag)}&page={page}",
+                headers={"Referer": "https://discords.com/"}
+            )
+            if not html: continue
+            for code in extract_codes(html):
+                if add_result(code, f"Discords.com:{tag}", f"page {page}"): found += 1
+            time.sleep(random.uniform(1.5, 3))
+    return found
+
+def scrape_discord_boats(pages=4):
+    """Discord.boats — server listing site."""
+    found = 0
+    tags  = ["trading","crypto","forex","stocks","finance","investing"]
+    for tag in tags:
+        for page in range(1, pages + 1):
+            html = http_get(
+                f"https://discord.boats/servers/tag/{urllib.parse.quote(tag)}?page={page}",
+                headers={"Referer": "https://discord.boats/"}
+            )
+            if not html: continue
+            for code in extract_codes(html):
+                if add_result(code, f"Discord.boats:{tag}", f"page {page}"): found += 1
+            time.sleep(random.uniform(1.5, 3))
+    return found
+
+def scrape_discordhome(pages=4):
+    """DiscordHome.com — server listing."""
+    found = 0
+    cats  = ["trading","crypto","finance","investing"]
+    for cat in cats:
+        for page in range(1, pages + 1):
+            html = http_get(
+                f"https://discordhome.com/server?category={urllib.parse.quote(cat)}&page={page}",
+                headers={"Referer": "https://discordhome.com/"}
+            )
+            if not html: continue
+            for code in extract_codes(html):
+                if add_result(code, f"DiscordHome:{cat}", f"page {page}"): found += 1
+            time.sleep(random.uniform(1.5, 3))
+    return found
+
+def scrape_discord_st(pages=4):
+    """Discord.st — server listing site."""
+    found = 0
+    tags  = ["trading","crypto","forex","stocks","finance","signals"]
+    for tag in tags:
+        for page in range(1, pages + 1):
+            html = http_get(
+                f"https://discord.st/servers/{urllib.parse.quote(tag)}/{page}/",
+                headers={"Referer": "https://discord.st/"}
+            )
+            if not html: continue
+            for code in extract_codes(html):
+                if add_result(code, f"Discord.st:{tag}", f"page {page}"): found += 1
+            time.sleep(random.uniform(1.5, 3))
+    return found
+
+def scrape_discordservers_com(pages=4):
+    """Discordservers.com — server listing."""
+    found = 0
+    tags  = ["trading","crypto","forex","stocks","finance","investing","signals"]
+    for tag in tags:
+        for page in range(1, pages + 1):
+            html = http_get(
+                f"https://discordservers.com/tag/{urllib.parse.quote(tag)}/{page}",
+                headers={"Referer": "https://discordservers.com/"}
+            )
+            if not html: continue
+            for code in extract_codes(html):
+                if add_result(code, f"DiscordServers.com:{tag}", f"page {page}"): found += 1
+            time.sleep(random.uniform(1.5, 3))
+    return found
+
+def scrape_bing(keywords):
+    """
+    Bing search for discord.gg links — Bing is more scraper-friendly than Google.
+    Searches for trading keywords + discord.gg.
+    """
+    found = 0
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.bing.com/",
+    }
+    for kw in keywords:
+        query   = urllib.parse.quote(f"{kw} discord.gg")
+        for offset in [0, 10, 20]:
+            html = http_get(
+                f"https://www.bing.com/search?q={query}&first={offset}",
+                headers=headers
+            )
+            if not html: continue
+            for code in extract_codes(html):
+                if add_result(code, f"Bing:{kw}", kw): found += 1
+            time.sleep(random.uniform(3, 6))
+    return found
+
+def scrape_youtube_search(keywords):
+    """
+    YouTube search results page — trading channels often post Discord links
+    in video descriptions and about pages. Scrapes the search results HTML.
+    """
+    found   = 0
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    terms = [f"{kw} discord" for kw in keywords[:8]]
+    for term in terms:
+        encoded = urllib.parse.quote(term)
+        html    = http_get(
+            f"https://www.youtube.com/results?search_query={encoded}",
+            headers=headers
+        )
+        if not html: continue
+        for code in extract_codes(html):
+            if add_result(code, f"YouTube:{term}", "search results"): found += 1
+        # Also check channel about pages linked from results
+        channel_re = re.compile(r'"channelId":"([A-Za-z0-9_\-]{20,30})"', re.IGNORECASE)
+        channel_ids = list(dict.fromkeys(channel_re.findall(html)))[:6]
+        for cid in channel_ids:
+            chtml = http_get(
+                f"https://www.youtube.com/channel/{cid}/about",
+                headers=headers
+            )
+            if not chtml: continue
+            for code in extract_codes(chtml):
+                if add_result(code, f"YouTube channel:{cid}", "channel about page"): found += 1
+            time.sleep(random.uniform(1, 2))
+        time.sleep(random.uniform(3, 5))
+    return found
+
+def scrape_telegram_public(keywords):
+    """
+    Telegram public channel search via t.me/s/ (public message mirror).
+    Trading Telegram channels frequently post Discord server links.
+    """
+    found   = 0
+    channels = [
+        "forexsignals", "cryptosignalz", "stocksignals", "tradingroom",
+        "forexfactory", "cryptoalerts", "daytraderz", "optionsflow",
+        "futurestrading", "algotrading", "propfirmnews", "fundedtraders",
+    ]
+    for ch in channels:
+        html = http_get(
+            f"https://t.me/s/{ch}",
+            headers={"Referer": "https://t.me/"}
+        )
+        if not html: continue
+        for code in extract_codes(html):
+            if add_result(code, f"Telegram:{ch}", "public channel"): found += 1
+        time.sleep(random.uniform(2, 3.5))
+
+    # Also search via Telegram search proxy
+    for kw in keywords[:6]:
+        encoded = urllib.parse.quote(kw)
+        html = http_get(
+            f"https://tgstat.com/search?q={encoded}+discord",
+            headers={"Referer": "https://tgstat.com/"}
+        )
+        if not html: continue
+        for code in extract_codes(html):
+            if add_result(code, f"Telegram search:{kw}", kw): found += 1
+        time.sleep(random.uniform(2, 4))
+    return found
+
+def scrape_reddit_extra_keywords(keywords):
+    """
+    Additional Reddit searches specifically targeting discord invite phrases
+    that get missed by the main keyword sweep.
+    """
+    found       = 0
+    extra_terms = [
+        "discord.gg trading", "join discord forex", "discord crypto community",
+        "discord trading group link", "free signals discord link",
+        "discord.gg invite stocks", "funded trader discord link",
+        "prop firm discord server", "discord swing trade alerts",
+        "discord options alerts free", "copy trading discord",
+    ]
+    for term in extra_terms:
+        html = http_get(
+            f"https://www.reddit.com/search.json?q={urllib.parse.quote(term)}&sort=new&limit=100",
+            headers={"Accept": "application/json"}
+        )
+        if not html: time.sleep(2); continue
+        try: data = json.loads(html)
+        except Exception: continue
+        posts = data.get("data", {}).get("children", [])
+        for post in posts:
+            pd   = post.get("data", {})
+            text = pd.get("title","")+" "+pd.get("selftext","")+" "+pd.get("body","")
+            for code in extract_codes(text):
+                if add_result(code, f"Reddit extra:{term}", pd.get("title", term)[:80]):
+                    found += 1
+        time.sleep(random.uniform(2, 4))
+    return found
+
+def scrape_google_custom(keywords):
+    """
+    Scrapes Google search results for discord.gg trading links.
+    Uses varied user agents and query phrasing to reduce blocking.
+    """
+    found   = 0
+    agents  = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/123.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36",
+    ]
+    for i, kw in enumerate(keywords[:10]):
+        query   = urllib.parse.quote(f'"{kw}" discord.gg')
+        agent   = agents[i % len(agents)]
+        html    = http_get(
+            f"https://www.google.com/search?q={query}&num=30",
+            headers={
+                "User-Agent":      agent,
+                "Accept-Language": "en-US,en;q=0.9",
+                "Referer":         "https://www.google.com/",
+            }
+        )
+        if not html: time.sleep(5); continue
+        for code in extract_codes(html):
+            if add_result(code, f"Google:{kw}", kw): found += 1
+        time.sleep(random.uniform(5, 10))  # Google is strict — longer delays
     return found
 
 # ── Orchestrator ──────────────────────────────────────────────────
@@ -546,14 +818,26 @@ def run_scrape(config, username):
             n = scrape_reddit_search(keywords[:4] if depth == "quick" else keywords)
             log(f"  → {n} new from Reddit search")
 
-        if "disboard"   in sources: log("🔍 Scraping Disboard.org…");        n = scrape_disboard(pages=pages);   log(f"  → {n} new")
-        if "discordme"  in sources: log("🔍 Scraping Discord.me…");           n = scrape_discord_me(pages=pages); log(f"  → {n} new")
-        if "twitter"    in sources: log("🔍 Scraping Twitter/X via Nitter…"); n = scrape_twitter_nitter(keywords[:3] if depth=="quick" else keywords[:10]); log(f"  → {n} new")
-        if "whop"       in sources: log("🔍 Scraping Whop.com…");             n = scrape_whop(pages=pages);       log(f"  → {n} new")
-        if "patreon"    in sources: log("🔍 Scraping Patreon…");              n = scrape_patreon(keywords);       log(f"  → {n} new")
-        if "gumroad"    in sources: log("🔍 Scraping Gumroad…");              n = scrape_gumroad();               log(f"  → {n} new")
-        if "skool"      in sources: log("🔍 Scraping Skool.com…");            n = scrape_skool();                 log(f"  → {n} new")
-        if "stocktwits" in sources: log("🔍 Scraping StockTwits…");           n = scrape_stocktwits();            log(f"  → {n} new")
+        if "disboard"     in sources: log("🔍 Scraping Disboard.org…");          n = scrape_disboard(pages=pages);                                               log(f"  → {n} new")
+        if "discordme"    in sources: log("🔍 Scraping Discord.me…");            n = scrape_discord_me(pages=pages);                                             log(f"  → {n} new")
+        if "topgg"        in sources: log("🔍 Scraping Top.gg…");                n = scrape_topgg(pages=pages);                                                   log(f"  → {n} new")
+        if "disforge"     in sources: log("🔍 Scraping Disforge.com…");          n = scrape_disforge(pages=pages);                                               log(f"  → {n} new")
+        if "discordscom"  in sources: log("🔍 Scraping Discords.com…");          n = scrape_discords_com(pages=pages);                                           log(f"  → {n} new")
+        if "discordboats" in sources: log("🔍 Scraping Discord.boats…");         n = scrape_discord_boats(pages=pages);                                          log(f"  → {n} new")
+        if "discordhome"  in sources: log("🔍 Scraping DiscordHome.com…");       n = scrape_discordhome(pages=pages);                                            log(f"  → {n} new")
+        if "discordst"    in sources: log("🔍 Scraping Discord.st…");            n = scrape_discord_st(pages=pages);                                             log(f"  → {n} new")
+        if "discordservers" in sources: log("🔍 Scraping DiscordServers.com…");  n = scrape_discordservers_com(pages=pages);                                     log(f"  → {n} new")
+        if "twitter"      in sources: log("🔍 Scraping Twitter/X via Nitter…");  n = scrape_twitter_nitter(keywords[:3] if depth=="quick" else keywords[:10]);   log(f"  → {n} new")
+        if "bing"         in sources: log("🔍 Scraping Bing search…");            n = scrape_bing(keywords[:5] if depth=="quick" else keywords[:12]);             log(f"  → {n} new")
+        if "google"       in sources: log("🔍 Scraping Google search…");          n = scrape_google_custom(keywords[:3] if depth=="quick" else keywords[:10]);   log(f"  → {n} new")
+        if "youtube"      in sources: log("🔍 Scraping YouTube…");                n = scrape_youtube_search(keywords[:4] if depth=="quick" else keywords[:8]);   log(f"  → {n} new")
+        if "telegram"     in sources: log("🔍 Scraping Telegram public…");        n = scrape_telegram_public(keywords);                                           log(f"  → {n} new")
+        if "reddit_extra" in sources: log("🔍 Scraping Reddit (extra terms)…");   n = scrape_reddit_extra_keywords(keywords);                                     log(f"  → {n} new")
+        if "whop"         in sources: log("🔍 Scraping Whop.com…");               n = scrape_whop(pages=pages);                                                   log(f"  → {n} new")
+        if "patreon"      in sources: log("🔍 Scraping Patreon…");                n = scrape_patreon(keywords);                                                   log(f"  → {n} new")
+        if "gumroad"      in sources: log("🔍 Scraping Gumroad…");                n = scrape_gumroad();                                                           log(f"  → {n} new")
+        if "skool"        in sources: log("🔍 Scraping Skool.com…");              n = scrape_skool();                                                             log(f"  → {n} new")
+        if "stocktwits"   in sources: log("🔍 Scraping StockTwits…");             n = scrape_stocktwits();                                                        log(f"  → {n} new")
 
         total = len(scrape_status["results"])
         log(f"✅ Done! {total} new servers found, {scrape_status['skipped']} already-seen skipped.", "info")
