@@ -291,7 +291,11 @@ def add_result(code, source, context=""):
     })
     return True
 
-def http_get(url, headers=None, timeout=15, retries=3):
+def http_get(url, headers=None, timeout=15, retries=3, rate_wait=3):
+    """
+    rate_wait: seconds to sleep on a 429 before retrying.
+    Keep low (2-4) for directories, higher (8-15) for search engines.
+    """
     base_headers = {
         "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Accept":          "text/html,application/xhtml+xml,application/json,*/*",
@@ -306,17 +310,19 @@ def http_get(url, headers=None, timeout=15, retries=3):
                 return resp.read().decode("utf-8", errors="ignore")
         except urllib.error.HTTPError as e:
             if e.code == 429:
-                wait = 12 * (attempt + 1)
-                log(f"  Rate limited — waiting {wait}s", "warning")
+                wait = rate_wait * (attempt + 1)
+                log(f"  Rate limited by {url[:45]}… — waiting {wait}s", "warning")
                 time.sleep(wait)
             elif e.code in (403, 404, 410):
                 return None
+            elif e.code == 503:
+                time.sleep(rate_wait)
             else:
-                time.sleep(3 * (attempt + 1))
+                time.sleep(2 * (attempt + 1))
         except Exception as exc:
             if attempt == retries - 1:
-                log(f"  Request failed {url[:60]}…: {exc}", "warning")
-            time.sleep(3)
+                log(f"  Request failed {url[:55]}…: {exc}", "warning")
+            time.sleep(2)
     return None
 
 # ── SCRAPERS ──────────────────────────────────────────────────────
@@ -325,7 +331,7 @@ def scrape_reddit_subreddit(subreddit, limit=100):
     found = 0
     for sort in ["new", "hot"]:
         html = http_get(f"https://www.reddit.com/r/{subreddit}/{sort}.json?limit={limit}",
-                        headers={"Accept": "application/json"})
+                        headers={"Accept": "application/json"}, rate_wait=2)
         if not html: continue
         try: data = json.loads(html)
         except Exception: continue
@@ -340,7 +346,7 @@ def scrape_reddit_subreddit(subreddit, limit=100):
             permalink = pd.get("permalink", "")
             if not permalink: continue
             chtml = http_get(f"https://www.reddit.com{permalink}.json?limit=50",
-                             headers={"Accept": "application/json"})
+                              headers={"Accept": "application/json"}, rate_wait=2)
             if not chtml: continue
             try:
                 for c in json.loads(chtml)[1]["data"]["children"]:
@@ -357,7 +363,7 @@ def scrape_reddit_search(keywords):
     for kw in keywords:
         html = http_get(
             f"https://www.reddit.com/search.json?q={urllib.parse.quote(kw)}&sort=new&limit=100&type=link,comment",
-            headers={"Accept": "application/json"}
+            headers={"Accept": "application/json"}, rate_wait=2
         )
         if not html: time.sleep(2); continue
         try: data = json.loads(html)
@@ -384,7 +390,7 @@ def scrape_disboard(pages=3):
     for tag in tags:
         for page in range(1, pages + 1):
             html = http_get(f"https://disboard.org/servers/tag/{tag}?page={page}&fl=en&sort=-member_count",
-                            headers={"Referer": "https://disboard.org/"})
+                            headers={"Referer": "https://disboard.org/"}, rate_wait=4)
             if not html: continue
             for m in inv_re.finditer(html):
                 code = m.group(1) or m.group(2)
@@ -396,7 +402,7 @@ def scrape_discord_me(pages=5):
     found = 0
     for tag in ["trading","crypto","forex","stocks","investing","signals"]:
         for page in range(1, pages + 1):
-            html = http_get(f"https://discord.me/servers/{page}?keyword={tag}")
+            html = http_get(f"https://discord.me/servers/{page}?keyword={tag}", rate_wait=2)
             if not html: continue
             for code in extract_codes(html):
                 if add_result(code, f"Discord.me:{tag}", f"page {page}"): found += 1
@@ -409,7 +415,7 @@ def scrape_twitter_nitter(keywords):
     for kw in keywords:
         encoded = urllib.parse.quote(f"{kw} discord.gg")
         for inst in instances:
-            html = http_get(f"https://{inst}/search?q={encoded}&f=tweets")
+            html = http_get(f"https://{inst}/search?q={encoded}&f=tweets", rate_wait=3)
             if html:
                 for code in extract_codes(html):
                     if add_result(code, f"Twitter/X:{kw}", kw): found += 1
@@ -426,7 +432,7 @@ def scrape_whop(pages=5):
     for cat in categories:
         for page in range(1, pages + 1):
             html = http_get(f"https://whop.com/marketplace/?category={cat}&page={page}",
-                            headers={"Referer": "https://whop.com/"})
+                            headers={"Referer": "https://whop.com/"}, rate_wait=5)
             if not html: continue
             codes = [m.group(1) for m in invite_re.finditer(html)] + [m.group(1) for m in link_re.finditer(html)]
             for code in list(dict.fromkeys(codes)):
@@ -449,7 +455,7 @@ def scrape_patreon(keywords):
                "funded trader discord","prop firm discord"]
     for term in terms:
         html = http_get(f"https://www.patreon.com/search?q={urllib.parse.quote(term)}",
-                        headers={"Referer": "https://www.patreon.com/"})
+                        headers={"Referer": "https://www.patreon.com/"}, rate_wait=5)
         if not html: time.sleep(2); continue
         for code in extract_codes(html):
             if add_result(code, f"Patreon:{term}", term): found += 1
@@ -471,7 +477,7 @@ def scrape_gumroad():
              "stock trading course","options trading","day trading signals"]
     for term in terms:
         html = http_get(f"https://gumroad.com/discover?query={urllib.parse.quote(term)}&sort=featured",
-                        headers={"Referer": "https://gumroad.com/"})
+                        headers={"Referer": "https://gumroad.com/"}, rate_wait=4)
         if not html: time.sleep(2); continue
         for code in extract_codes(html):
             if add_result(code, f"Gumroad:{term}", term): found += 1
@@ -490,7 +496,7 @@ def scrape_skool():
     found = 0
     for term in ["trading","forex","crypto","stocks","options","signals"]:
         html = http_get(f"https://www.skool.com/discover?q={urllib.parse.quote(term)}",
-                        headers={"Referer": "https://www.skool.com/"})
+                        headers={"Referer": "https://www.skool.com/"}, rate_wait=4)
         if not html: time.sleep(2); continue
         for code in extract_codes(html):
             if add_result(code, f"Skool.com:{term}", term): found += 1
@@ -509,7 +515,7 @@ def scrape_skool():
 def scrape_stocktwits():
     found = 0
     for sym in ["FOREX","CRYPTO","STOCKS","OPTIONS","FUTURES","SPY","BTC.X","ETH.X"]:
-        html = http_get(f"https://stocktwits.com/symbol/{sym}")
+        html = http_get(f"https://stocktwits.com/symbol/{sym}", rate_wait=3)
         if not html: continue
         for code in extract_codes(html):
             if add_result(code, f"StockTwits:{sym}", "symbol stream"): found += 1
@@ -529,7 +535,7 @@ def scrape_topgg(pages=5):
         for page in range(1, pages + 1):
             html = http_get(
                 f"https://top.gg/servers/tag/{urllib.parse.quote(tag)}?page={page}",
-                headers={"Referer": "https://top.gg/"}
+                headers={"Referer": "https://top.gg/"}, rate_wait=4
             )
             if not html: continue
             for m in inv_re.finditer(html):
@@ -548,7 +554,7 @@ def scrape_disforge(pages=5):
         for page in range(1, pages + 1):
             html = http_get(
                 f"https://disforge.com/servers?type={cat}&page={page}",
-                headers={"Referer": "https://disforge.com/"}
+                headers={"Referer": "https://disforge.com/"}, rate_wait=3
             )
             if not html: continue
             for code in extract_codes(html):
@@ -564,7 +570,7 @@ def scrape_discords_com(pages=5):
         for page in range(1, pages + 1):
             html = http_get(
                 f"https://discords.com/servers?tag={urllib.parse.quote(tag)}&page={page}",
-                headers={"Referer": "https://discords.com/"}
+                headers={"Referer": "https://discords.com/"}, rate_wait=3
             )
             if not html: continue
             for code in extract_codes(html):
@@ -580,7 +586,7 @@ def scrape_discord_boats(pages=4):
         for page in range(1, pages + 1):
             html = http_get(
                 f"https://discord.boats/servers/tag/{urllib.parse.quote(tag)}?page={page}",
-                headers={"Referer": "https://discord.boats/"}
+                headers={"Referer": "https://discord.boats/"}, rate_wait=3
             )
             if not html: continue
             for code in extract_codes(html):
@@ -596,7 +602,7 @@ def scrape_discordhome(pages=4):
         for page in range(1, pages + 1):
             html = http_get(
                 f"https://discordhome.com/server?category={urllib.parse.quote(cat)}&page={page}",
-                headers={"Referer": "https://discordhome.com/"}
+                headers={"Referer": "https://discordhome.com/"}, rate_wait=3
             )
             if not html: continue
             for code in extract_codes(html):
@@ -612,7 +618,7 @@ def scrape_discord_st(pages=4):
         for page in range(1, pages + 1):
             html = http_get(
                 f"https://discord.st/servers/{urllib.parse.quote(tag)}/{page}/",
-                headers={"Referer": "https://discord.st/"}
+                headers={"Referer": "https://discord.st/"}, rate_wait=3
             )
             if not html: continue
             for code in extract_codes(html):
@@ -628,7 +634,7 @@ def scrape_discordservers_com(pages=4):
         for page in range(1, pages + 1):
             html = http_get(
                 f"https://discordservers.com/tag/{urllib.parse.quote(tag)}/{page}",
-                headers={"Referer": "https://discordservers.com/"}
+                headers={"Referer": "https://discordservers.com/"}, rate_wait=3
             )
             if not html: continue
             for code in extract_codes(html):
@@ -652,7 +658,7 @@ def scrape_bing(keywords):
         for offset in [0, 10, 20]:
             html = http_get(
                 f"https://www.bing.com/search?q={query}&first={offset}",
-                headers=headers
+                headers=headers, rate_wait=8
             )
             if not html: continue
             for code in extract_codes(html):
@@ -675,7 +681,7 @@ def scrape_youtube_search(keywords):
         encoded = urllib.parse.quote(term)
         html    = http_get(
             f"https://www.youtube.com/results?search_query={encoded}",
-            headers=headers
+            headers=headers, rate_wait=5
         )
         if not html: continue
         for code in extract_codes(html):
@@ -721,7 +727,7 @@ def scrape_telegram_public(keywords):
         encoded = urllib.parse.quote(kw)
         html = http_get(
             f"https://tgstat.com/search?q={encoded}+discord",
-            headers={"Referer": "https://tgstat.com/"}
+            headers={"Referer": "https://tgstat.com/"}, rate_wait=4
         )
         if not html: continue
         for code in extract_codes(html):
@@ -745,7 +751,7 @@ def scrape_reddit_extra_keywords(keywords):
     for term in extra_terms:
         html = http_get(
             f"https://www.reddit.com/search.json?q={urllib.parse.quote(term)}&sort=new&limit=100",
-            headers={"Accept": "application/json"}
+            headers={"Accept": "application/json"}, rate_wait=2
         )
         if not html: time.sleep(2); continue
         try: data = json.loads(html)
@@ -780,7 +786,7 @@ def scrape_google_custom(keywords):
                 "User-Agent":      agent,
                 "Accept-Language": "en-US,en;q=0.9",
                 "Referer":         "https://www.google.com/",
-            }
+            }, rate_wait=15
         )
         if not html: time.sleep(5); continue
         for code in extract_codes(html):
