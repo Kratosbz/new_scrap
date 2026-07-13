@@ -421,6 +421,7 @@ function startScrape() {
     document.getElementById('start-btn').disabled = true;
     document.getElementById('stop-btn').style.display = 'flex';
     document.getElementById('live-badge').style.display = 'flex';
+    _doneConfirmCount = 0;
     clearLog();
     startPolling();
   });
@@ -473,17 +474,29 @@ function resetControls() {
 }
 
 let lastLogCount = 0, lastResultCount = 0;
+let _doneConfirmCount = 0;
+
 function pollStatus() {
   fetch('/api/status').then(r => r.json()).then(d => {
     if (!d.running && state.polling) {
+      // Wait for 3 consecutive "not running" responses before declaring done
+      // prevents false-stops between subreddit scans
+      _doneConfirmCount++;
+      if (_doneConfirmCount < 3) return;
       stopPolling(); resetControls();
+      _doneConfirmCount = 0;
       toast(`Done! ${d.count} new servers found, ${d.skipped} skipped.`);
       loadHistory(); loadCredits();
+      fetchResults(); // final fetch to make sure UI is up to date
+    } else {
+      _doneConfirmCount = 0; // reset if still running
     }
     d.progress.slice(lastLogCount).forEach(l => appendLog(l.msg, l.level));
     lastLogCount = d.progress.length;
     document.getElementById('stat-skipped').textContent = d.skipped || 0;
     if (d.count !== lastResultCount) { lastResultCount = d.count; fetchResults(); }
+  }).catch(() => {
+    // Network hiccup — don't stop polling
   });
 }
 
