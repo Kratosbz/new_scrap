@@ -25,6 +25,12 @@ DATA_DIR = os.environ.get("DATA_DIR", "./data")
 DB_PATH  = os.path.join(DATA_DIR, "app.db")
 os.makedirs(DATA_DIR, exist_ok=True)
 
+# Log DB path immediately so it's visible in Render logs
+logging.basicConfig(level=logging.INFO)
+_startup_logger = logging.getLogger(__name__)
+_startup_logger.info(f"=== DB PATH: {DB_PATH} ===")
+_startup_logger.info(f"=== DATA_DIR env: {os.environ.get('DATA_DIR', 'NOT SET — using ./data')} ===")
+
 SESSION_TIMEOUT    = 60 * 60 * 8
 SERVER_EXPIRY_DAYS = 30
 
@@ -251,11 +257,24 @@ def get_user_history_stats(username):
         ).fetchone()[0]
     return {"total_seen": total, "active": active, "eligible": total - active}
 
-# ── Scrape state ──────────────────────────────────────────────────
-scrape_status = {
-    "running": False, "progress": [], "results": [],
-    "skipped": 0, "seen_codes": set(), "error": None, "username": None,
-}
+# ── Per-user scrape state ─────────────────────────────────────────
+# Each user gets their own state so multiple users can scrape simultaneously.
+user_scrapes: dict = {}   # {username: {running, progress, results, ...}}
+_scrapes_lock = threading.Lock()
+
+def get_scrape(username):
+    """Get or create scrape state for a user."""
+    with _scrapes_lock:
+        if username not in user_scrapes:
+            user_scrapes[username] = {
+                "running":    False,
+                "progress":   [],
+                "results":    [],
+                "skipped":    0,
+                "seen_codes": set(),
+                "error":      None,
+            }
+        return user_scrapes[username]
 
 # ── Helpers ───────────────────────────────────────────────────────
 def extract_codes(text):
@@ -270,19 +289,28 @@ def extract_codes(text):
 def build_invite_url(code):
     return f"https://discord.gg/{code}"
 
+# Thread-local storage so each scrape thread knows its own username
+_tl = threading.local()
+
 def log(msg, level="info"):
-    scrape_status["progress"].append({"msg": msg, "level": level, "ts": time.time()})
-    getattr(logger, level)(msg)
+    username = getattr(_tl, "username", None)
+    if username:
+        st = get_scrape(username)
+        st["progress"].append({"msg": msg, "level": level, "ts": time.time()})
+    getattr(logger, level)(f"[{username}] {msg}" if username else msg)
 
 def add_result(code, source, context=""):
-    username = scrape_status.get("username")
-    if code in scrape_status["seen_codes"]:
+    username = getattr(_tl, "username", None)
+    if not username:
         return False
-    if username and not is_fresh_for_user(code, username):
-        scrape_status["skipped"] += 1
+    st = get_scrape(username)
+    if code in st["seen_codes"]:
         return False
-    scrape_status["seen_codes"].add(code)
-    scrape_status["results"].append({
+    if not is_fresh_for_user(code, username):
+        st["skipped"] += 1
+        return False
+    st["seen_codes"].add(code)
+    st["results"].append({
         "code":     code,
         "url":      build_invite_url(code),
         "source":   source,
@@ -1234,8 +1262,10 @@ def scrape_pastebin(keywords):
 
 # ── Orchestrator ──────────────────────────────────────────────────
 def run_scrape(config, username):
-    scrape_status.update({"running": True, "results": [], "skipped": 0,
-                          "seen_codes": set(), "progress": [], "error": None, "username": username})
+    _tl.username = username
+    st = get_scrape(username)
+    st.update({"running": True, "results": [], "skipped": 0,
+               "seen_codes": set(), "progress": [], "error": None})
     try:
         sources    = config.get("sources", ["reddit","disboard"])
         custom_kw  = config.get("keywords", [])
@@ -1285,7 +1315,7 @@ def run_scrape(config, username):
         if "reddit" in sources:
             log("🔍 Scraping Reddit subreddits…")
             for i, sub in enumerate(subreddits[:subs_cap]):
-                if not scrape_status["running"]: break
+                if not get_scrape(username)["running"]: break
                 log(f"  [{i+1}/{subs_cap}] r/{sub}")
                 n = scrape_reddit_subreddit(sub, limit=sub_limit)
                 log(f"  → {n} new from r/{sub}")
@@ -1295,17 +1325,19 @@ def run_scrape(config, username):
             log(f"  → {n} new from Reddit search")
         if "reddit_extra"  in sources: log("🔍 Scraping Reddit extra keywords…");  n = scrape_reddit_extra_keywords(keywords);                                     log(f"  → {n} new")
 
-        total = len(scrape_status["results"])
-        log(f"✅ Done! {total} new servers found, {scrape_status['skipped']} already-seen skipped.", "info")
-        if scrape_status["results"]:
-            add_to_user_history(username, scrape_status["results"])
+        st    = get_scrape(username)
+        total = len(st["results"])
+        log(f"✅ Done! {total} new servers found, {st['skipped']} already-seen skipped.", "info")
+        if st["results"]:
+            add_to_user_history(username, st["results"])
 
     except Exception as e:
-        scrape_status["error"] = str(e)
+        st = get_scrape(username)
+        st["error"] = str(e)
         log(f"❌ Fatal error: {e}", "error")
         logger.exception("Scrape error")
     finally:
-        scrape_status["running"] = False
+        get_scrape(username)["running"] = False
 
 # ── Auth routes ───────────────────────────────────────────────────
 @app.route("/login", methods=["GET"])
@@ -1494,9 +1526,10 @@ def get_credits():
 @app.route("/api/start", methods=["POST"])
 @login_required
 def start_scrape():
-    if scrape_status["running"]:
-        return jsonify({"error": "Already running"}), 400
     username = session["user"]
+    st = get_scrape(username)
+    if st["running"]:
+        return jsonify({"error": "Already running"}), 400
     if get_user_credits(username) <= 0:
         return jsonify({"error": "no_credits", "message": "No scrape credits left. Contact admin to top up."}), 403
     if not deduct_credit(username):
@@ -1508,30 +1541,32 @@ def start_scrape():
 @app.route("/api/stop", methods=["POST"])
 @login_required
 def stop_scrape():
-    scrape_status["running"] = False
+    username = session["user"]
+    get_scrape(username)["running"] = False
     return jsonify({"status": "stopped"})
 
 @app.route("/api/status")
 @login_required
 def get_status():
+    st = get_scrape(session["user"])
     return jsonify({
-        "running":  scrape_status["running"],
-        "count":    len(scrape_status["results"]),
-        "skipped":  scrape_status["skipped"],
-        "progress": scrape_status["progress"][-60:],
-        "error":    scrape_status["error"],
+        "running":  st["running"],
+        "count":    len(st["results"]),
+        "skipped":  st["skipped"],
+        "progress": st["progress"][-60:],
+        "error":    st["error"],
     })
 
 @app.route("/api/results")
 @login_required
 def get_results():
-    return jsonify(scrape_status["results"])
+    return jsonify(get_scrape(session["user"])["results"])
 
 @app.route("/api/export")
 @login_required
 def export_results():
     fmt     = request.args.get("fmt", "json")
-    results = scrape_status["results"]
+    results = get_scrape(session["user"])["results"]
     if fmt == "csv":
         def esc(s): return '"' + str(s).replace('"','""') + '"'
         lines = ["code,url,source,context,found_at"]
@@ -1546,7 +1581,8 @@ def export_results():
 @app.route("/api/clear", methods=["POST"])
 @login_required
 def clear_results():
-    scrape_status.update({"results": [], "seen_codes": set(), "progress": [], "skipped": 0})
+    st = get_scrape(session["user"])
+    st.update({"results": [], "seen_codes": set(), "progress": [], "skipped": 0})
     return jsonify({"status": "cleared"})
 
 # ── Startup ───────────────────────────────────────────────────────
