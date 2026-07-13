@@ -83,6 +83,17 @@ def init_db():
                 PRIMARY KEY (username, code),
                 FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
             );
+            CREATE TABLE IF NOT EXISTS scrape_results (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                username    TEXT NOT NULL,
+                code        TEXT NOT NULL,
+                url         TEXT NOT NULL,
+                source      TEXT NOT NULL,
+                context     TEXT NOT NULL DEFAULT '',
+                found_at    TEXT NOT NULL,
+                session_ts  TEXT NOT NULL,
+                FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
+            );
         """)
         # Migrate existing DBs that don't have new columns yet
         cols = [r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()]
@@ -257,21 +268,51 @@ def get_user_history_stats(username):
         ).fetchone()[0]
     return {"total_seen": total, "active": active, "eligible": total - active}
 
+# ── Persisted scrape results ─────────────────────────────────────
+def save_results_to_db(username, results, session_ts):
+    """Persist current scrape results to DB so they survive restarts."""
+    if not results:
+        return
+    with get_db() as conn:
+        conn.execute("DELETE FROM scrape_results WHERE username=?", (username,))
+        conn.executemany(
+            "INSERT INTO scrape_results (username, code, url, source, context, found_at, session_ts) "
+            "VALUES (?,?,?,?,?,?,?)",
+            [(username, r["code"], r["url"], r["source"],
+              r.get("context",""), r["found_at"], session_ts) for r in results]
+        )
+
+def load_results_from_db(username):
+    """Load last scrape results from DB."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT code, url, source, context, found_at FROM scrape_results "
+            "WHERE username=? ORDER BY id ASC", (username,)
+        ).fetchall()
+    return [{"code": r["code"], "url": r["url"], "source": r["source"],
+             "context": r["context"], "found_at": r["found_at"]} for r in rows]
+
+def clear_results_from_db(username):
+    with get_db() as conn:
+        conn.execute("DELETE FROM scrape_results WHERE username=?", (username,))
+
 # ── Per-user scrape state ─────────────────────────────────────────
 # Each user gets their own state so multiple users can scrape simultaneously.
 user_scrapes: dict = {}   # {username: {running, progress, results, ...}}
 _scrapes_lock = threading.Lock()
 
 def get_scrape(username):
-    """Get or create scrape state for a user."""
+    """Get or create scrape state for a user.
+    On first access, restores persisted results from DB."""
     with _scrapes_lock:
         if username not in user_scrapes:
+            persisted = load_results_from_db(username)
             user_scrapes[username] = {
                 "running":    False,
                 "progress":   [],
-                "results":    [],
+                "results":    persisted,
                 "skipped":    0,
-                "seen_codes": set(),
+                "seen_codes": {r["code"] for r in persisted},
                 "error":      None,
             }
         return user_scrapes[username]
@@ -1330,6 +1371,8 @@ def run_scrape(config, username):
         log(f"✅ Done! {total} new servers found, {st['skipped']} already-seen skipped.", "info")
         if st["results"]:
             add_to_user_history(username, st["results"])
+            session_ts = datetime.datetime.now().isoformat()
+            save_results_to_db(username, st["results"], session_ts)
 
     except Exception as e:
         st = get_scrape(username)
@@ -1581,8 +1624,10 @@ def export_results():
 @app.route("/api/clear", methods=["POST"])
 @login_required
 def clear_results():
-    st = get_scrape(session["user"])
+    username = session["user"]
+    st = get_scrape(username)
     st.update({"results": [], "seen_codes": set(), "progress": [], "skipped": 0})
+    clear_results_from_db(username)
     return jsonify({"status": "cleared"})
 
 # ── Startup ───────────────────────────────────────────────────────

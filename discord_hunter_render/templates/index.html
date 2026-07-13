@@ -594,8 +594,40 @@ function toast(msg) {
   toastTimer = setTimeout(() => el.className = '', 3500);
 }
 
-loadHistory();
-loadCredits();
+// ── On page load: restore any existing results and resume polling if running ──
+async function initOnLoad() {
+  loadHistory();
+  loadCredits();
+
+  try {
+    // Check if a scrape is already running or has results waiting
+    const statusRes = await fetch('/api/status');
+    const status    = await statusRes.json();
+
+    if (status.count > 0) {
+      // Results exist on the server — fetch and display them immediately
+      lastResultCount = status.count;
+      fetchResults();
+    }
+
+    if (status.running) {
+      // A scrape is already in progress (e.g. user refreshed mid-scrape)
+      // Resume the live UI without starting a new scrape
+      document.getElementById('start-btn').disabled = true;
+      document.getElementById('stop-btn').style.display = 'flex';
+      document.getElementById('live-badge').style.display = 'flex';
+      lastLogCount = Math.max(0, status.progress.length - 20);
+      status.progress.slice(lastLogCount).forEach(l => appendLog(l.msg, l.level));
+      lastLogCount = status.progress.length;
+      _doneConfirmCount = 0;
+      startPolling();
+    }
+  } catch (e) {
+    // Silent fail — page still works, just won't restore state
+  }
+}
+
+initOnLoad();
 </script>
 </body>
 </html>
