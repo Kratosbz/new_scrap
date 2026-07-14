@@ -1,7 +1,7 @@
 # 🗄️ Turso Database Setup (Free, No Card)
 
 Turso is a hosted SQLite database — free tier gives 500MB and works perfectly
-with this app. No credit card required.
+with this app. No credit card required...
 
 ---
 
