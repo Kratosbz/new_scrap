@@ -545,6 +545,7 @@ def get_scrape(username):
                 persisted = []
             user_scrapes[username] = {
                 "running":    False,
+                "finished":   False,
                 "progress":   [],
                 "results":    persisted,
                 "skipped":    0,
@@ -1554,7 +1555,7 @@ def scrape_pastebin(keywords):
 def run_scrape(config, username):
     _tl.username = username
     st = get_scrape(username)
-    st.update({"running": True, "results": [], "skipped": 0,
+    st.update({"running": True, "finished": False, "results": [], "skipped": 0,
                "seen_codes": set(), "progress": [], "error": None})
     # Hold a direct reference — don't re-fetch st at end of scrape
     # because get_scrape() with a fresh call might return wrong object
@@ -1634,7 +1635,8 @@ def run_scrape(config, username):
                 save_results_to_db(username, st["results"], datetime.datetime.now().isoformat())
             except Exception as e:
                 logger.warning(f"[{username}] Finally save_results failed: {e}")
-        st["running"] = False
+        st["running"]  = False
+        st["finished"] = True
 
 # ── Auth routes ───────────────────────────────────────────────────
 @app.route("/login", methods=["GET"])
@@ -1857,6 +1859,7 @@ def get_status():
     st = get_scrape(session["user"])
     return jsonify({
         "running":  st["running"],
+        "finished": st.get("finished", False),
         "count":    len(st["results"]),
         "skipped":  st["skipped"],
         "progress": st["progress"][-60:],

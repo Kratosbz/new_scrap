@@ -421,7 +421,7 @@ function startScrape() {
     document.getElementById('start-btn').disabled = true;
     document.getElementById('stop-btn').style.display = 'flex';
     document.getElementById('live-badge').style.display = 'flex';
-    _doneConfirmCount = 0;
+    
     clearLog();
     startPolling();
   });
@@ -474,8 +474,6 @@ function resetControls() {
 }
 
 let lastLogCount = 0, lastResultCount = 0;
-let _doneConfirmCount = 0;
-
 function pollStatus() {
   fetch('/api/status').then(r => r.json()).then(d => {
     // Always append new log lines
@@ -483,26 +481,22 @@ function pollStatus() {
     lastLogCount = d.progress.length;
     document.getElementById('stat-skipped').textContent = d.skipped || 0;
 
-    // Fetch results any time count changes OR on every tick while running
+    // Fetch results whenever count changes or scrape is running
     if (d.count !== lastResultCount || d.running) {
       lastResultCount = d.count;
       if (d.count > 0) fetchResults();
     }
 
-    if (!d.running && state.polling) {
-      // Require 5 consecutive not-running responses — fast scrapes finish
-      // in seconds and we need time for the final fetchResults to complete
-      _doneConfirmCount++;
-      if (_doneConfirmCount < 5) return;
+    // Only declare done when backend explicitly sets finished=true
+    // This prevents false-done from brief gaps between sources
+    if (d.finished && !d.running && state.polling) {
       stopPolling(); resetControls();
-      _doneConfirmCount = 0;
-      // Always do a final fetch before declaring done
       fetchResults();
       loadHistory(); loadCredits();
       toast(`Done! ${d.count} new servers found, ${d.skipped} skipped.`);
-    } else if (d.running) {
-      _doneConfirmCount = 0;
     }
+  }).catch(() => {});
+}
   }).catch(() => {
     // Network hiccup — don't stop polling
   });
@@ -635,7 +629,7 @@ async function initOnLoad() {
       lastLogCount = Math.max(0, status.progress.length - 20);
       status.progress.slice(lastLogCount).forEach(l => appendLog(l.msg, l.level));
       lastLogCount = status.progress.length;
-      _doneConfirmCount = 0;
+      
       startPolling();
     }
   } catch (e) {
@@ -646,35 +640,48 @@ async function initOnLoad() {
 initOnLoad();
 
 // Re-sync when user returns to this tab after switching away
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') {
-    fetch('/api/status').then(r => r.json()).then(d => {
-      // Always re-fetch results when returning to tab — on mobile the browser
-      // may have cleared state.results while the page was backgrounded
-      if (d.count > 0) {
-        lastResultCount = 0; // reset so fetchResults always runs
-        fetchResults();
+document.addEventListener('visibilitychange', async () => {
+  if (document.visibilityState !== 'visible') return;
+  try {
+    const d = await fetch('/api/status').then(r => r.json());
+
+    // Sync log lines
+    d.progress.slice(lastLogCount).forEach(l => appendLog(l.msg, l.level));
+    lastLogCount = d.progress.length;
+    document.getElementById('stat-skipped').textContent = d.skipped || 0;
+
+    // Always restore results from server — mobile may have cleared memory
+    if (d.count > 0) {
+      lastResultCount = 0; // force fetchResults to run
+      await fetchResults(); // await so results are rendered before toast
+    }
+
+    // Scrape finished while tab was hidden
+    if (!d.running && state.polling) {
+      stopPolling(); resetControls();
+      
+      loadHistory(); loadCredits();
+      // Use actual rendered result count, not d.count which may be stale
+      const actual = state.results.length;
+      if (actual > 0) {
+        toast(`Done! ${actual} servers found — results restored below.`);
       }
-      // Scrape finished while tab was hidden
-      if (!d.running && state.polling) {
-        stopPolling(); resetControls();
-        _doneConfirmCount = 0;
-        loadHistory(); loadCredits();
-        toast(`Done! ${d.count} new servers found, ${d.skipped} skipped.`);
-      }
-      // Scrape started while tab was hidden — resume polling
-      if (d.running && !state.polling) {
-        document.getElementById('start-btn').disabled = true;
-        document.getElementById('stop-btn').style.display = 'flex';
-        document.getElementById('live-badge').style.display = 'flex';
-        startPolling();
-      }
-      // Sync log
-      d.progress.slice(lastLogCount).forEach(l => appendLog(l.msg, l.level));
-      lastLogCount = d.progress.length;
-      document.getElementById('stat-skipped').textContent = d.skipped || 0;
-    }).catch(() => {});
-  }
+    }
+
+    // Scrape still running — resume polling
+    if (d.running && !state.polling) {
+      document.getElementById('start-btn').disabled = true;
+      document.getElementById('stop-btn').style.display = 'flex';
+      document.getElementById('live-badge').style.display = 'flex';
+      startPolling();
+    }
+
+    // Scrape finished and no polling was active (normal background finish)
+    if (!d.running && !state.polling && d.count > 0) {
+      resetControls();
+    }
+
+  } catch(e) {}
 });
 </script>
 </body>
