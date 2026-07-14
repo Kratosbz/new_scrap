@@ -294,6 +294,16 @@ def init_db():
             found_at    TEXT NOT NULL,
             session_ts  TEXT NOT NULL
         )""",
+        # Global server bank table
+        """CREATE TABLE IF NOT EXISTS server_bank (
+            code        TEXT PRIMARY KEY,
+            url         TEXT NOT NULL,
+            source      TEXT NOT NULL DEFAULT '',
+            context     TEXT NOT NULL DEFAULT '',
+            keywords    TEXT NOT NULL DEFAULT '[]',
+            added_at    TEXT NOT NULL,
+            hit_count   INTEGER NOT NULL DEFAULT 0
+        )""",
         # Add columns if they don't exist yet (safe to run on existing DBs)
         "ALTER TABLE users ADD COLUMN daily_credits INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE users ADD COLUMN last_reset TEXT NOT NULL DEFAULT ''",
@@ -528,6 +538,123 @@ def clear_results_from_db(username):
     with get_db() as conn:
         conn.execute("DELETE FROM scrape_results WHERE username=?", (username,))
 
+# ── Global Server Bank ───────────────────────────────────────────
+BANK_SERVE_THRESHOLD  = 20   # if bank has >= this many matches, skip scraping
+BANK_SCRAPE_THRESHOLD = 10   # if bank has < this many matches, run scrape
+
+def bank_search(keywords):
+    """
+    Search the bank for servers matching any of the given keywords.
+    keywords: list of strings
+    Returns list of result dicts, up to BANK_SERVE_THRESHOLD * 2.
+    Each bank row's keywords field is a JSON array of strings.
+    A server matches if ANY of its stored keywords overlaps with the query keywords.
+    """
+    if not keywords:
+        return []
+    try:
+        with get_db() as conn:
+            rows = conn.execute(
+                "SELECT code, url, source, context, keywords, added_at "
+                "FROM server_bank ORDER BY hit_count DESC LIMIT 2000"
+            ).fetchall()
+        if not rows:
+            return []
+
+        kw_lower  = [k.lower() for k in keywords]
+        matched   = []
+        for r in rows:
+            stored_kws = []
+            try:
+                stored_kws = json.loads(r["keywords"] if isinstance(r, dict) else r[4])
+            except Exception:
+                pass
+            stored_lower = [k.lower() for k in stored_kws]
+            if any(q in s or s in q for q in kw_lower for s in stored_lower):
+                matched.append({
+                    "code":     r["code"]    if isinstance(r, dict) else r[0],
+                    "url":      r["url"]     if isinstance(r, dict) else r[1],
+                    "source":   (r["source"] if isinstance(r, dict) else r[2]) + " [bank]",
+                    "context":  r["context"] if isinstance(r, dict) else r[3],
+                    "found_at": datetime.datetime.now().strftime("%H:%M:%S"),
+                })
+            if len(matched) >= BANK_SERVE_THRESHOLD * 3:
+                break
+
+        return matched
+    except Exception as e:
+        logger.warning(f"Bank search failed: {e}")
+        return []
+
+def bank_push(results, keywords):
+    """
+    Push new servers into the bank.
+    For existing entries, merge in the new keywords.
+    results:  list of result dicts (code, url, source, context)
+    keywords: list of keyword strings used in the scrape that found them
+    """
+    if not results:
+        return
+    now = datetime.datetime.now().isoformat()
+    pushed = 0
+    try:
+        for r in results:
+            code = r["code"]
+            with get_db() as conn:
+                existing = conn.execute(
+                    "SELECT keywords FROM server_bank WHERE code=?", (code,)
+                ).fetchone()
+
+            if existing:
+                # Merge keywords
+                try:
+                    stored = json.loads(
+                        existing["keywords"] if isinstance(existing, dict) else existing[0]
+                    )
+                except Exception:
+                    stored = []
+                merged = list(dict.fromkeys(stored + keywords))
+                with get_db() as conn:
+                    conn.execute(
+                        "UPDATE server_bank SET keywords=?, hit_count=hit_count+1 WHERE code=?",
+                        (json.dumps(merged), code)
+                    )
+            else:
+                # New entry
+                with get_db() as conn:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO server_bank "
+                        "(code, url, source, context, keywords, added_at, hit_count) "
+                        "VALUES (?,?,?,?,?,?,0)",
+                        (code, r["url"], r.get("source",""), r.get("context",""),
+                         json.dumps(keywords), now)
+                    )
+                pushed += 1
+
+        logger.info(f"Bank push: {pushed} new servers added, {len(results)-pushed} updated")
+    except Exception as e:
+        logger.warning(f"Bank push failed: {e}")
+
+def bank_increment_hits(codes):
+    """Increment hit_count for codes served from bank."""
+    for code in codes:
+        try:
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE server_bank SET hit_count=hit_count+1 WHERE code=?", (code,)
+                )
+        except Exception:
+            pass
+
+def get_bank_stats():
+    """Return total server count in bank."""
+    try:
+        with get_db() as conn:
+            row = conn.execute("SELECT COUNT(*) as c FROM server_bank").fetchone()
+            return row["c"] if isinstance(row, dict) else row[0]
+    except Exception:
+        return 0
+
 # ── Per-user scrape state ─────────────────────────────────────────
 # Each user gets their own state so multiple users can scrape simultaneously.
 user_scrapes: dict = {}   # {username: {running, progress, results, ...}}
@@ -551,6 +678,7 @@ def get_scrape(username):
                 "skipped":    0,
                 "seen_codes": {r["code"] for r in persisted},
                 "error":      None,
+                "bank_served": False,
             }
         return user_scrapes[username]
 
@@ -1556,9 +1684,7 @@ def run_scrape(config, username):
     _tl.username = username
     st = get_scrape(username)
     st.update({"running": True, "finished": False, "results": [], "skipped": 0,
-               "seen_codes": set(), "progress": [], "error": None})
-    # Hold a direct reference — don't re-fetch st at end of scrape
-    # because get_scrape() with a fresh call might return wrong object
+               "seen_codes": set(), "progress": [], "error": None, "bank_served": False})
     try:
         sources    = config.get("sources", ["reddit","disboard"])
         custom_kw  = config.get("keywords", [])
@@ -1570,8 +1696,33 @@ def run_scrape(config, username):
         sub_limit  = {"quick": 50, "normal": 100, "deep": 200}.get(depth, 100)
         subs_cap   = 5 if depth == "quick" else len(subreddits)
 
-        st = get_user_history_stats(username)
-        log(f"👤 {username} — {st['total_seen']} total seen, {st['active']} blocked (<{SERVER_EXPIRY_DAYS}d)")
+        hist = get_user_history_stats(username)
+        log(f"👤 {username} — {hist['total_seen']} total seen, {hist['active']} blocked (<{SERVER_EXPIRY_DAYS}d)")
+
+        # ── Bank check ────────────────────────────────────────────
+        bank_results = bank_search(keywords)
+        # Filter out servers already seen by this user
+        bank_results = [r for r in bank_results if is_fresh_for_user(r["code"], username)]
+        log(f"🏦 Bank: {len(bank_results)} fresh matching servers found")
+
+        if len(bank_results) >= BANK_SERVE_THRESHOLD:
+            # Enough in bank — serve directly, skip scraping
+            log(f"✅ Serving {len(bank_results)} servers from bank — no scrape needed.")
+            served = bank_results[:BANK_SERVE_THRESHOLD]
+            for r in served:
+                st["seen_codes"].add(r["code"])
+                st["results"].append(r)
+            bank_increment_hits([r["code"] for r in served])
+            add_to_user_history(username, served)
+            save_results_to_db(username, served, datetime.datetime.now().isoformat())
+            st["bank_served"] = True
+            log(f"🏦 Done! {len(served)} servers served from bank.")
+        else:
+            # Not enough in bank — run scrape, then merge
+            if bank_results:
+                log(f"🏦 Only {len(bank_results)} in bank — running scrape to top up.")
+            else:
+                log(f"🏦 Bank miss — running full scrape.")
 
         # ── FAST SOURCES FIRST (results appear quickly) ───────────
         if "disboard"      in sources: log("🔍 Scraping Disboard.org…");            n = scrape_disboard(pages=pages);                                               log(f"  → {n} new")
@@ -1618,11 +1769,29 @@ def run_scrape(config, username):
             log(f"  → {n} new from Reddit search")
         if "reddit_extra"  in sources: log("🔍 Scraping Reddit extra keywords…");  n = scrape_reddit_extra_keywords(keywords);                                     log(f"  → {n} new")
 
+            # Merge bank results with scraped results
+        if bank_results:
+            existing_codes = st["seen_codes"]
+            for r in bank_results:
+                if r["code"] not in existing_codes:
+                    existing_codes.add(r["code"])
+                    st["results"].append(r)
+            bank_increment_hits([r["code"] for r in bank_results])
+            log(f"🏦 Merged {len(bank_results)} bank results with scrape results.")
+
         total = len(st["results"])
         log(f"✅ Done! {total} new servers found, {st['skipped']} already-seen skipped.", "info")
-        logger.info(f"[{username}] Scrape complete — {total} results, history saved in real-time")
+        logger.info(f"[{username}] Scrape complete — {total} results in memory")
+
         if st["results"]:
             save_results_to_db(username, st["results"], datetime.datetime.now().isoformat())
+            # Push scraped results to bank for future users
+            scrape_only = [r for r in st["results"] if not r.get("source","").endswith("[bank]")]
+            if scrape_only:
+                bank_push(scrape_only, keywords)
+                log(f"🏦 {len(scrape_only)} new servers pushed to bank.")
+
+        # end of else (scrape) block
 
     except Exception as e:
         st["error"] = str(e)
@@ -1858,12 +2027,14 @@ def stop_scrape():
 def get_status():
     st = get_scrape(session["user"])
     return jsonify({
-        "running":  st["running"],
-        "finished": st.get("finished", False),
-        "count":    len(st["results"]),
-        "skipped":  st["skipped"],
-        "progress": st["progress"][-60:],
-        "error":    st["error"],
+        "running":     st["running"],
+        "finished":    st.get("finished", False),
+        "bank_served": st.get("bank_served", False),
+        "count":       len(st["results"]),
+        "skipped":     st["skipped"],
+        "progress":    st["progress"][-60:],
+        "error":       st["error"],
+        "bank_total":  get_bank_stats(),
     })
 
 @app.route("/api/results")
@@ -1940,6 +2111,17 @@ def db_test():
         results["status"] = "ERROR"
 
     return jsonify(results)
+
+@app.route("/api/bank/stats")
+@login_required
+def bank_stats():
+    try:
+        with get_db() as conn:
+            total = conn.execute("SELECT COUNT(*) as c FROM server_bank").fetchone()
+            total = total["c"] if isinstance(total, dict) else total[0]
+        return jsonify({"total": total})
+    except Exception as e:
+        return jsonify({"total": 0, "error": str(e)})
 
 @app.route("/api/clear", methods=["POST"])
 @login_required

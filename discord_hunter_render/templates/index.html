@@ -75,7 +75,7 @@ select{cursor:pointer}
 
 .main{display:flex;flex-direction:column;gap:14px}
 
-.stats-row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.stats-row{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
 @media(max-width:600px){.stats-row{grid-template-columns:repeat(2,1fr)}}
 .stat-card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:12px 14px}
 .stat-card .stat-label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.4px;margin-bottom:4px}
@@ -267,6 +267,10 @@ td{padding:9px 14px;vertical-align:middle}
       <div class="stat-card" id="credits-card" style="border-color:rgba(88,101,242,0.3)">
         <div class="stat-label">Scrape Credits</div>
         <div class="stat-val" id="stat-credits" style="color:var(--accent)">—</div>
+      </div>
+      <div class="stat-card" style="border-color:rgba(59,165,92,0.3)">
+        <div class="stat-label">🏦 Bank Size</div>
+        <div class="stat-val" id="stat-bank" style="color:var(--green)">—</div>
       </div>
     </div>
 
@@ -480,6 +484,9 @@ function pollStatus() {
     d.progress.slice(lastLogCount).forEach(l => appendLog(l.msg, l.level));
     lastLogCount = d.progress.length;
     document.getElementById('stat-skipped').textContent = d.skipped || 0;
+    if (d.bank_total !== undefined) {
+      document.getElementById('stat-bank').textContent = d.bank_total.toLocaleString();
+    }
 
     // Fetch results whenever count changes or scrape is running
     if (d.count !== lastResultCount || d.running) {
@@ -488,12 +495,15 @@ function pollStatus() {
     }
 
     // Only declare done when backend explicitly sets finished=true
-    // This prevents false-done from brief gaps between sources
     if (d.finished && !d.running && state.polling) {
       stopPolling(); resetControls();
       fetchResults();
       loadHistory(); loadCredits();
-      toast(`Done! ${d.count} new servers found, ${d.skipped} skipped.`);
+      if (d.bank_served) {
+        toast(`🏦 ${d.count} servers served from bank — no bandwidth used!`);
+      } else {
+        toast(`Done! ${d.count} new servers found, ${d.skipped} skipped.`);
+      }
     }
   }).catch(() => {});
 }
@@ -607,6 +617,10 @@ function toast(msg) {
 async function initOnLoad() {
   loadHistory();
   loadCredits();
+  // Load bank size
+  fetch('/api/bank/stats').then(r => r.json()).then(d => {
+    document.getElementById('stat-bank').textContent = (d.total || 0).toLocaleString();
+  }).catch(() => {});
 
   try {
     const statusRes = await fetch('/api/status');
