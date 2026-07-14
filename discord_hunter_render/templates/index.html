@@ -58,11 +58,11 @@ select{cursor:pointer}
 .form-row{margin-bottom:12px}
 
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:10px 18px;border-radius:9px;font-family:var(--sans);font-size:13px;font-weight:600;cursor:pointer;border:none;transition:all 0.15s}
-.btn-primary{background:var(--accent);color:#fff;width:100%;margin-top:4px}
+.btn-primary{background:var(--accent);color:#fff;width:100%;margin-top:4px;position:relative}
 .btn-primary:hover{background:var(--accent-h)}
 .btn-primary:active{transform:scale(0.98)}
 .btn-primary:disabled{background:var(--subtle);cursor:not-allowed;transform:none}
-.btn-stop{background:var(--red-bg);border:1px solid rgba(237,66,69,0.3);color:var(--red);width:100%;margin-top:6px;display:none}
+.btn-stop{background:var(--red-bg);border:1px solid rgba(237,66,69,0.3);color:var(--red);width:100%;margin-top:0;display:none;position:absolute;top:0;left:0;height:100%;border-radius:9px}
 .btn-stop:hover{background:rgba(237,66,69,0.2)}
 .btn-sm{padding:6px 12px;font-size:12px;border-radius:7px}
 .btn-ghost{background:transparent;border:1px solid var(--border2);color:var(--muted)}
@@ -83,10 +83,7 @@ select{cursor:pointer}
 .stat-card.accent .stat-val{color:var(--accent)}
 .stat-card.muted-val .stat-val{color:var(--muted)}
 
-.history-bar{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:11px 16px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
-.history-bar .hb-label{font-size:11px;color:var(--muted);font-family:var(--mono)}
-.history-bar .hb-item{display:flex;align-items:center;gap:6px;font-size:12px}
-.history-bar .hb-num{font-family:var(--mono);font-weight:700}
+
 .hb-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
 
 .log-wrap{background:var(--bg2);border:1px solid var(--border);border-radius:14px;overflow:hidden}
@@ -234,67 +231,33 @@ td{padding:9px 14px;vertical-align:middle}
       <div class="panel-body">
         <div class="form-row">
           <label>Keywords (press Enter)</label>
-          <input type="text" id="kw-input" placeholder="e.g. prop firm signals…">
+          <input type="text" id="kw-input" placeholder="e.g. prop firm signals…" enterkeyhint="done" inputmode="text">
           <div class="tag-wrap" id="kw-tags"></div>
         </div>
         <div class="form-row" style="margin-top:10px">
           <label>Subreddits (press Enter)</label>
-          <input type="text" id="sub-input" placeholder="e.g. TradingView">
+          <input type="text" id="sub-input" placeholder="e.g. TradingView" enterkeyhint="done" inputmode="text">
           <div class="tag-wrap" id="sub-tags"></div>
         </div>
       </div>
     </div>
 
-    <button class="btn btn-primary" id="start-btn" onclick="startScrape()">▶ Start Hunting</button>
-    <button class="btn btn-stop" id="stop-btn" onclick="stopScrape()">■ Stop</button>
+    <div style="position:relative;width:100%;margin-top:4px">
+      <button class="btn btn-primary" id="start-btn" onclick="startScrape()" style="margin-top:0">▶ Start Hunting</button>
+      <button class="btn btn-stop" id="stop-btn" onclick="stopScrape()">■ Stop</button>
+    </div>
   </div>
 
   <div class="main">
 
-    <div class="stats-row">
+    <div class="stats-row" style="grid-template-columns:1fr 1fr;max-width:340px">
       <div class="stat-card accent">
-        <div class="stat-label">Found This Run</div>
+        <div class="stat-label">Servers Found</div>
         <div class="stat-val" id="stat-total">0</div>
       </div>
-      <div class="stat-card muted-val">
-        <div class="stat-label">Skipped (seen)</div>
-        <div class="stat-val" id="stat-skipped">0</div>
-      </div>
-      <div class="stat-card muted-val">
-        <div class="stat-label">Total History</div>
-        <div class="stat-val" id="stat-history">—</div>
-      </div>
       <div class="stat-card" id="credits-card" style="border-color:rgba(88,101,242,0.3)">
-        <div class="stat-label">Scrape Credits</div>
+        <div class="stat-label">Credits</div>
         <div class="stat-val" id="stat-credits" style="color:var(--accent)">—</div>
-      </div>
-      <div class="stat-card" style="border-color:rgba(59,165,92,0.3)">
-        <!-- <div class="stat-label">🏦 Bank Size</div> -->
-        <div class="stat-val" id="stat-bank" style="color:var(--green)">—</div>
-      </div>
-    </div>
-
-    <div id="no-credits-banner">
-      <span style="font-size:18px">🚫</span>
-      <span>You have <strong>0 scrape credits</strong> remaining. Contact your admin to top up.</span>
-    </div>
-
-    <div class="history-bar">
-      <span class="hb-label">YOUR SERVER HISTORY</span>
-      <div class="hb-item">
-        <div class="hb-dot" style="background:var(--accent)"></div>
-        <span class="hb-num" id="hb-total">—</span>
-        <span style="font-size:11px;color:var(--muted)">total seen</span>
-      </div>
-      <div class="hb-item">
-        <div class="hb-dot" style="background:var(--red)"></div>
-        <span class="hb-num" id="hb-active">—</span>
-        <span style="font-size:11px;color:var(--muted)">blocked (&lt;30d)</span>
-      </div>
-      <div class="hb-item">
-        <div class="hb-dot" style="background:var(--green)"></div>
-        <span class="hb-num" id="hb-eligible">—</span>
-        <span style="font-size:11px;color:var(--muted)">re-eligible (&gt;30d)</span>
       </div>
     </div>
 
@@ -353,11 +316,29 @@ const state = { keywords: [], subreddits: [], polling: null, results: [] };
 function setupTagInput(inputId, tagsId, arr) {
   const input = document.getElementById(inputId);
   const wrap  = document.getElementById(tagsId);
+
+  function addTag() {
+    const val = input.value.trim();
+    if (!val) return;
+    if (!arr.includes(val)) { arr.push(val); renderTags(wrap, arr); }
+    input.value = '';
+  }
+
+  // Desktop Enter key
   input.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && input.value.trim()) {
-      const val = input.value.trim();
-      if (!arr.includes(val)) { arr.push(val); renderTags(wrap, arr); }
-      input.value = '';
+    if (e.key === 'Enter') { e.preventDefault(); addTag(); }
+  });
+
+  // Android: keyboard fires keyup with Enter or uses compositionend
+  input.addEventListener('keyup', e => {
+    if (e.key === 'Enter') { e.preventDefault(); addTag(); }
+  });
+
+  // Android fallback: detect newline character injected into value
+  input.addEventListener('input', e => {
+    if (input.value.includes('\n') || input.value.includes('\r')) {
+      input.value = input.value.replace(/[\r\n]/g, '');
+      addTag();
     }
   });
 }
@@ -483,10 +464,7 @@ function pollStatus() {
     // Always append new log lines
     d.progress.slice(lastLogCount).forEach(l => appendLog(l.msg, l.level));
     lastLogCount = d.progress.length;
-    document.getElementById('stat-skipped').textContent = d.skipped || 0;
-    if (d.bank_total !== undefined) {
-      document.getElementById('stat-bank').textContent = d.bank_total.toLocaleString();
-    }
+
 
     // Fetch results whenever count changes or scrape is running
     if (d.count !== lastResultCount || d.running) {
@@ -499,11 +477,7 @@ function pollStatus() {
       stopPolling(); resetControls();
       fetchResults();
       loadHistory(); loadCredits();
-      if (d.bank_served) {
-        toast(`🏦 ${d.count} servers served from bank — no bandwidth used!`);
-      } else {
-        toast(`Done! ${d.count} new servers found, ${d.skipped} skipped.`);
-      }
+      toast(`Done! ${d.count} servers found.`);
     }
   }).catch(() => {});
 }
@@ -572,14 +546,7 @@ function renderResults(data) {
 
 function filterTable() { renderResults(state.results); }
 
-function loadHistory() {
-  fetch('/api/me/history').then(r => r.json()).then(d => {
-    document.getElementById('stat-history').textContent = d.total_seen;
-    document.getElementById('hb-total').textContent     = d.total_seen;
-    document.getElementById('hb-active').textContent    = d.active;
-    document.getElementById('hb-eligible').textContent  = d.eligible;
-  });
-}
+function loadHistory() { fetch('/api/me/history').catch(() => {}); }
 
 function loadCredits() {
   fetch('/api/credits').then(r => r.json()).then(d => {
@@ -598,7 +565,6 @@ function clearResults() {
   fetch('/api/clear', { method: 'POST' }).then(() => {
     state.results = []; renderResults([]);
     document.getElementById('stat-total').textContent   = 0;
-    document.getElementById('stat-skipped').textContent = 0;
     lastResultCount = 0;
   });
 }
@@ -617,10 +583,7 @@ function toast(msg) {
 async function initOnLoad() {
   loadHistory();
   loadCredits();
-  // Load bank size
-  fetch('/api/bank/stats').then(r => r.json()).then(d => {
-    document.getElementById('stat-bank').textContent = (d.total || 0).toLocaleString();
-  }).catch(() => {});
+
 
   try {
     const statusRes = await fetch('/api/status');
@@ -658,7 +621,6 @@ document.addEventListener('visibilitychange', async () => {
     // Sync log lines
     d.progress.slice(lastLogCount).forEach(l => appendLog(l.msg, l.level));
     lastLogCount = d.progress.length;
-    document.getElementById('stat-skipped').textContent = d.skipped || 0;
 
     // Always restore results from server — mobile may have cleared memory
     if (d.count > 0) {
