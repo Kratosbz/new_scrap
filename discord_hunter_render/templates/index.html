@@ -497,10 +497,6 @@ function pollStatus() {
     }
   }).catch(() => {});
 }
-  }).catch(() => {
-    // Network hiccup — don't stop polling
-  });
-}
 
 async function fetchResults() {
   try {
