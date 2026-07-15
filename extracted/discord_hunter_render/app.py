@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 #   TURSO_TOKEN = your-auth-token
 TURSO_URL   = os.environ.get("TURSO_URL", "")
 TURSO_TOKEN = os.environ.get("TURSO_TOKEN", "")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
 # Convert libsql:// URL to HTTPS for the REST API
 def _turso_http_url():
@@ -538,6 +539,72 @@ def clear_results_from_db(username):
     with get_db() as conn:
         conn.execute("DELETE FROM scrape_results WHERE username=?", (username,))
 
+# ── Keyword translation ───────────────────────────────────────────
+# Translates non-English keywords to English before saving to bank
+# so bank matching works across languages.
+# Results cached in memory to avoid repeated API calls.
+_translation_cache = {}
+
+def translate_to_english(keyword):
+    """
+    Translate a keyword to English using Claude API.
+    Returns the English version. If already English or API unavailable,
+    returns the original unchanged.
+    """
+    if not keyword or not ANTHROPIC_API_KEY:
+        return keyword
+
+    kw = keyword.strip().lower()
+
+    # Cache hit
+    if kw in _translation_cache:
+        return _translation_cache[kw]
+
+    # Quick check — if it's ASCII-only and short, likely already English
+    try:
+        kw.encode('ascii')
+        # ASCII — probably English, skip API call
+        _translation_cache[kw] = keyword
+        return keyword
+    except UnicodeEncodeError:
+        pass  # Non-ASCII — needs translation
+
+    try:
+        payload = json.dumps({
+            "model": "claude-haiku-4-5-20251001",
+            "max_tokens": 50,
+            "messages": [{
+                "role": "user",
+                "content": (
+                    f"Translate this search keyword to English. "
+                    f"Reply with ONLY the English translation, nothing else. "
+                    f"If it is already English, reply with it unchanged. "
+                    f"Keyword: {keyword}"
+                )
+            }]
+        }).encode()
+
+        req = urllib.request.Request(
+            "https://api.anthropic.com/v1/messages",
+            data=payload,
+            headers={
+                "x-api-key":         ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type":      "application/json",
+            },
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+        translated = data["content"][0]["text"].strip().lower()
+        _translation_cache[kw] = translated
+        logger.info(f"Translated keyword: '{keyword}' → '{translated}'")
+        return translated
+    except Exception as e:
+        logger.warning(f"Translation failed for '{keyword}': {e}")
+        _translation_cache[kw] = keyword  # Cache original on failure
+        return keyword
+
 # ── Global Server Bank ───────────────────────────────────────────
 BANK_SERVE_THRESHOLD  = 20   # if bank has >= this many matches, skip scraping
 BANK_SCRAPE_THRESHOLD = 10   # if bank has < this many matches, run scrape
@@ -570,11 +637,15 @@ def bank_search(keywords):
             except Exception:
                 pass
             stored_lower = [k.lower() for k in stored_kws]
-            if any(q in s or s in q for q in kw_lower for s in stored_lower):
+            # Only match if keywords are closely related (one contains the other)
+            # Prevents "crypto" matching "hotel crypto conference" style pollution
+            if any(q == s or q in s.split() or s in q.split()
+                   or (len(q) > 4 and q in s) or (len(s) > 4 and s in q)
+                   for q in kw_lower for s in stored_lower):
                 matched.append({
                     "code":     r["code"]    if isinstance(r, dict) else r[0],
                     "url":      r["url"]     if isinstance(r, dict) else r[1],
-                    "source":   (r["source"] if isinstance(r, dict) else r[2]) + " [bank]",
+                    "source":   r["source"] if isinstance(r, dict) else r[2],
                     "context":  r["context"] if isinstance(r, dict) else r[3],
                     "found_at": datetime.datetime.now().strftime("%H:%M:%S"),
                 })
@@ -1700,7 +1771,9 @@ def run_scrape(config, username):
         log(f"👤 {username} — {hist['total_seen']} total seen, {hist['active']} blocked (<{SERVER_EXPIRY_DAYS}d)")
 
         # ── Bank check ────────────────────────────────────────────
-        bank_results = bank_search(keywords)
+        # Translate keywords to English for bank matching
+        translated_search_kws = [translate_to_english(k) for k in keywords]
+        bank_results = bank_search(translated_search_kws)
         # Filter out servers already seen by this user
         bank_results = [r for r in bank_results if is_fresh_for_user(r["code"], username)]
         log(f"🏦 Bank: {len(bank_results)} fresh matching servers found")
